@@ -1,90 +1,193 @@
-#include <Wire.h>
-#include <RTClib.h>
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
 #include <Servo.h>
-#include <Ultrasonic.h>
-#include <LiquidCrystal_I2C.h>
 #include <SPI.h>
+#include <Adafruit_I2CDevice.h>
+#include <PubSubClient.h>
 
-#define TRIGGER_PIN 12
-#define ECHO_PIN 13
-#define SERVO_1_PIN D5
-#define SERVO_2_PIN D6
-#define WATER_LEVEL_PIN A0
+// WiFi
+const char *ssid = "hidden";
+const char *password = "hidden";
+const char *mqtt_server = "broker.hivemq.com";
 
-#define SERVO_1_OPEN_ANGLE 45
-#define SERVO_1_CLOSE_ANGLE 0
-#define SERVO_2_FEED_ANGLE 180
-#define SERVO_2_RETURN_ANGLE 0
+// Pub/Sub MQTT
+WiFiClient espClient;
+PubSubClient client(espClient);
+// WiFi
 
-Servo servo1;
-Servo servo2;
-RTC_DS3231 rtc;
-Ultrasonic ultrasonic1(TRIGGER_PIN, ECHO_PIN);
-LiquidCrystal_I2C lcd(0x27, 16, 2); 
+// Timer
+long now = millis();
+long lastMeasure = 0;
+String macAddr = "";
+// Timer
+
+// Servo SG90
+int servoPin = D0;
+Servo sg90;
+// Servo SG90
+
+// HC-SR04
+int triggerPin = D2;
+int echoPin = D1;
+// HC-SR04
+
+// WiFi
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  // Mulai menghubungkan ke WiFi
+  WiFi.begin(ssid, password);
+
+  // proses koneksi
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  // Konfirmasi koneksi berhasil
+  Serial.println("");
+  Serial.println("WiFi connected - ESP IP address: ");
+  Serial.println(WiFi.localIP());
+  macAddr = WiFi.macAddress();
+  Serial.println(macAddr);
+}
+
+// Reconnect WiFi
+void reconnect() {
+
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+
+    if (client.connect(macAddr.c_str())) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+
+      delay(5000);
+    }
+  }
+}
 
 void setup()
 {
+
+  // WiFi
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+
+  // Servo SG90
+  sg90.attach(servoPin);
+  // Servo SG90
+
   Serial.begin(9600);
-  Wire.begin();
-  rtc.begin();
-  servo1.attach(SERVO_1_PIN);
-  servo2.attach(SERVO_2_PIN);
-  pinMode(WATER_LEVEL_PIN, INPUT);
 
-  lcd.begin(16, 2);
-  lcd.setCursor(0, 0);
-  lcd.print("Current Time:");
+  // HC-SR04
+  pinMode(triggerPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // reset servo ke 0 derajat
+  sg90.write(0);
 }
 
-void loop()
-{
-  long depth = ultrasonic1.read();
-
-  // RTC
-  DateTime now = rtc.now();
-
-  if (depth >= 30 && (now.hour() == 7 || now.hour() == 11 || now.hour() == 17))
-  {
-    // 3s
-    servo1.write(SERVO_1_OPEN_ANGLE);
-    delay(3000);
-    servo1.write(SERVO_1_CLOSE_ANGLE);
-  }
-
-  // water level
-  int waterLevel = analogRead(WATER_LEVEL_PIN);
-
-  if (waterLevel == 100)
-  {
-    // 5s
-    servo2.write(SERVO_2_FEED_ANGLE);
-    delay(5000);
-    servo2.write(SERVO_2_RETURN_ANGLE);
-  }
-
-  lcd.setCursor(0, 1);
-  lcd.print(now.timestamp(DateTime::TIMESTAMP_TIME));
-
-  lcd.setCursor(0, 2);
-  lcd.print("Next feeding time is");
-
-  if (now.hour() < 7)
-  {
-    lcd.print(" 7:00 AM");
-  }
-  else if (now.hour() < 11)
-  {
-    lcd.print(" 11:00 AM");
-  }
-  else if (now.hour() < 17)
-  {
-    lcd.print(" 5:00 PM");
-  }
-  else
-  {
-    lcd.print(" 7:00 AM");
-    lcd.print(now.day() + 1);
-  }
-
-  delay(1000);
+// HC-SR04
+// Mengukur jarak
+int rangeCheck() {
+  long duration, distance;
+  digitalWrite(triggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(triggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(triggerPin, LOW);
+  duration = pulseIn(echoPin, HIGH);
+  distance = duration * 0.034 / 2;
+  Serial.println(distance);
+  delay(2000);
+  // Mengembalikan nilai jarak
+  return distance;
 }
+
+// Servo SG90
+void moveServo() {
+  
+  // Menggerakkan servo 0-180 2x
+  sg90.write(180);
+  client.publish("esp/servo", "180"); 
+  delay(2000);
+  sg90.write(0);
+  client.publish("esp/servo", "0"); 
+
+  sg90.write(180);
+  client.publish("esp/servo", "180"); 
+  delay(2000);
+  sg90.write(0);
+  client.publish("esp/servo", "0"); 
+
+}
+
+// Loop
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+
+  if (!client.loop()) {
+    client.connect(macAddr.c_str());
+  }
+
+  now = millis();
+  client.publish("esp/range", String(rangeCheck()).c_str());
+
+  static bool triggerFlag = false;
+  static unsigned long triggerTime = 0;
+
+  if (now - lastMeasure > 5000) {
+    lastMeasure = now;
+    const int range = rangeCheck();
+
+    if (range > 13) {
+      triggerFlag = true;
+      triggerTime = millis();
+    }
+  }
+
+  if (triggerFlag && millis() - triggerTime < 5000) {
+    const int range = rangeCheck();
+
+    if (range > 13) {
+      moveServo();
+    }
+  }
+
+  Serial.println(rangeCheck());
+  Serial.println(triggerFlag);
+  Serial.println(triggerTime);
+}
+// void loop() {
+  
+//   if (!client.connected()) {
+//     reconnect();
+//   }
+
+//   if (!client.loop()) {
+//     client.connect(macAddr.c_str());
+//   }
+  
+//   now = millis();
+//   client.publish("esp/range", String(rangeCheck()).c_str());
+  
+//   if (now - lastMeasure > 5000) {
+//     lastMeasure = now;
+
+//     const int range = rangeCheck();
+
+//     if (range > 13) {
+//       moveServo();
+//     }
+//   }
+  
+//   Serial.println(rangeCheck());
+// }
