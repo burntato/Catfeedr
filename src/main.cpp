@@ -119,7 +119,7 @@ void moveServo() {
   delay(2000);
   sg90.write(0);
   client.publish("esp/servo", "0"); 
-
+  delay(500);
   sg90.write(180);
   client.publish("esp/servo", "180"); 
   delay(2000);
@@ -166,28 +166,3 @@ void loop() {
   Serial.println(triggerFlag);
   Serial.println(triggerTime);
 }
-// void loop() {
-  
-//   if (!client.connected()) {
-//     reconnect();
-//   }
-
-//   if (!client.loop()) {
-//     client.connect(macAddr.c_str());
-//   }
-  
-//   now = millis();
-//   client.publish("esp/range", String(rangeCheck()).c_str());
-  
-//   if (now - lastMeasure > 5000) {
-//     lastMeasure = now;
-
-//     const int range = rangeCheck();
-
-//     if (range > 13) {
-//       moveServo();
-//     }
-//   }
-  
-//   Serial.println(rangeCheck());
-// }
